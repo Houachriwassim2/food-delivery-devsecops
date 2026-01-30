@@ -1,31 +1,125 @@
-version: "3.8"
+version: '3.8'  
 
 services:
+
+  # =========================
+  # Base de données MongoDB
+  # =========================
   mongodb:
-    image: mongo:7
-    container_name: mongodb
-    ports:
-      - "27017:27017"
+    image: mongo:7.0                     # Image officielle MongoDB
+    container_name: food-mongodb          # Nom du conteneur
+    restart: unless-stopped               # Redémarrage automatique
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: ${MONGO_USER}     # Utilisateur admin
+      MONGO_INITDB_ROOT_PASSWORD: ${MONGO_PASSWORD} # Mot de passe admin
     volumes:
-      - mongo_data:/data/db
+      - mongodb_data:/data/db             # Volume persistant pour les données
+    networks:
+      - food-network                     # Réseau privé du projet
+    healthcheck:                          # Vérification de l’état MongoDB
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
+  # =========================
+  # Backend Node.js / Express
+  # =========================
   backend:
-    build: ./backend
-    container_name: backend
-    env_file:
-      - .env
-    ports:
-      - "4000:4000"
-    depends_on:
-      - mongodb
+    build:
+      context: ./backend                 # Dossier du backend
+      dockerfile: Dockerfile             # Dockerfile backend
+    container_name: food-backend 
+    restart: unless-stopped
+    environment:
+      NODE_ENV: production               # Mode production
+      MONGO_URL: mongodb://${MONGO_USER}:${MONGO_PASSWORD}@mongodb:27017/fooddelivery?authSource=admin
+      JWT_SECRET: ${JWT_SECRET}           # Secret JWT
+      PORT: 4000                          # Port backend
+    depends_on:                           # Attendre MongoDB sain
+      mongodb:
+        condition: service_healthy
+    networks:
+      - food-network
+    healthcheck:                          # Endpoint health du backend
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost:4000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
+  # =========================
+  # Frontend React + Nginx
+  # =========================
   frontend:
-    build: ./frontend
-    container_name: frontend
+    build:
+      context: ./frontend                # Dossier frontend
+      dockerfile: Dockerfile             # Dockerfile frontend
+    container_name: food-frontend
+    restart: unless-stopped
     ports:
-      - "80:80"
-    depends_on:
-      - backend
+      - "80:80"                           # Exposition du frontend
+    depends_on:                           # Attendre backend sain
+      backend:
+        condition: service_healthy
+    networks:
+      - food-network
 
+  # =========================
+  # SonarQube (SAST)
+  # =========================
+  sonarqube:
+    image: sonarqube:lts-community        # Version LTS communautaire
+    container_name: food-sonarqube
+    environment:
+      SONAR_ES_BOOTSTRAP_CHECKS_DISABLE: "true" # Désactive les checks ES
+    ports:
+      - "9000:9000"                       # Interface SonarQube
+    volumes:
+      - sonarqube_data:/opt/sonarqube/data # Données persistantes
+      - sonarqube_logs:/opt/sonarqube/logs # Logs
+    networks:
+      - food-network
+
+  # =========================
+  # Prometheus (Monitoring)
+  # =========================
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: food-prometheus
+    ports:
+      - "9090:9090"                       # Interface Prometheus
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml # Config Prometheus
+    networks:
+      - food-network
+
+  # =========================
+  # Grafana (Dashboards)
+  # =========================
+  grafana:
+    image: grafana/grafana:latest
+    container_name: food-grafana
+    ports:
+      - "3001:3000"                       # Interface Grafana
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin   # Mot de passe admin (démo)
+    volumes:
+      - grafana_data:/var/lib/grafana     # Stockage dashboards
+    networks:
+      - food-network
+
+# =========================
+# Volumes persistants
+# =========================
 volumes:
-  mongo_data:
+  mongodb_data:                           # Données MongoDB
+  sonarqube_data:                         # Données SonarQube
+  sonarqube_logs:                         # Logs SonarQube
+  grafana_data:                           # Données Grafana
+
+# =========================
+# Réseau Docker privé
+# =========================
+networks:
+  food-network:
+    driver: bridge                        # Réseau bridge isolé
