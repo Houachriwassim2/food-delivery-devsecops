@@ -12,7 +12,6 @@ pipeline {
                 sh '''
                     echo "=== SETTING UP ENVIRONMENT ==="
                     
-                    # Install Node.js if missing
                     if ! command -v node &> /dev/null; then
                         echo "Installing Node.js 18..."
                         apt-get update
@@ -24,21 +23,19 @@ pipeline {
                     echo "Node.js version: $(node --version)"
                     echo "npm version: $(npm --version)"
                     
-                    # Install Docker if missing
                     if ! command -v docker &> /dev/null; then
                         echo "Installing Docker..."
                         apt-get install -y docker.io
                     fi
                     
-                    echo "Docker version: $(docker --version 2>/dev/null || echo 'Docker not found')"
+                    echo "Docker version: $(docker --version 2>/dev/null || echo "Docker not found")"
                     
-                    # Install Docker Compose if missing
                     if ! command -v docker-compose &> /dev/null; then
                         echo "Installing docker-compose..."
                         apt-get install -y docker-compose
                     fi
                     
-                    echo "docker-compose version: $(docker-compose --version 2>/dev/null || echo 'docker-compose not found')"
+                    echo "docker-compose version: $(docker-compose --version 2>/dev/null || echo "docker-compose not found")"
                 '''
             }
         }
@@ -98,13 +95,10 @@ pipeline {
                 sh '''
                     echo "Building and deploying with Docker Compose..."
                     
-                    # Stop and remove existing containers
                     docker-compose down || true
                     
-                    # Build images
                     docker-compose build --no-cache || echo "Build completed"
                     
-                    # Start services
                     docker-compose up -d
                     
                     echo "Waiting for services to start..."
@@ -121,14 +115,12 @@ pipeline {
                 sh '''
                     echo "Verifying deployment..."
                     
-                    # Check backend
                     if curl -f http://localhost:4000/health 2>/dev/null; then
                         echo "✅ Backend is healthy"
                     else
                         echo "⚠️ Backend health check failed"
                     fi
                     
-                    # Check frontend
                     if curl -I http://localhost:80 2>/dev/null; then
                         echo "✅ Frontend is reachable"
                     else
@@ -145,7 +137,6 @@ pipeline {
                 sh '''
                     echo "Performing security scan..."
                     
-                    # Install Trivy
                     if ! command -v trivy &> /dev/null; then
                         echo "Installing Trivy..."
                         curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
@@ -165,7 +156,6 @@ pipeline {
         always {
             echo "=== PIPELINE COMPLETED ==="
             
-            # Sauvegarder les logs
             sh '''
                 echo "Saving logs..."
                 docker-compose logs --tail=50 > deployment.log 2>&1 || true
