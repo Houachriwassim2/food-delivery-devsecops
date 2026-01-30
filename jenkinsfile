@@ -63,7 +63,7 @@ pipeline {
 
         stage('🔐 SAST - SonarQube') {
             steps {
-                withSonarQubeEnv('SonarQubeServer') {
+                withSonarQubeEnv('SonarQube') {
                     sh '''
                     sonar-scanner \
                       -Dsonar.projectKey=food-delivery \
