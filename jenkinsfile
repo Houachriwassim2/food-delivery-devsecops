@@ -95,17 +95,30 @@ pipeline {
                 sh '''
                     echo "Building and deploying with Docker Compose..."
                     
-                    docker-compose down || true
+                    # Stop and remove ALL containers
+                    echo "Stopping existing containers..."
+                    docker-compose down --remove-orphans --volumes --timeout 30 || true
                     
-                    docker-compose build --no-cache || echo "Build completed"
+                    # Clean up old containers
+                    echo "Cleaning up old containers..."
+                    docker container prune -f || true
                     
-                    docker-compose up -d
+                    # Build images
+                    echo "Building Docker images..."
+                    docker-compose build --no-cache --pull || echo "Build completed"
+                    
+                    # Start services with force recreation
+                    echo "Starting services..."
+                    docker-compose up -d --force-recreate --remove-orphans
                     
                     echo "Waiting for services to start..."
-                    sleep 30
+                    sleep 45
                     
                     echo "=== SERVICES STATUS ==="
                     docker-compose ps
+                    
+                    echo "=== RUNNING CONTAINERS ==="
+                    docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
                 '''
             }
         }
@@ -115,16 +128,56 @@ pipeline {
                 sh '''
                     echo "Verifying deployment..."
                     
-                    if curl -f http://localhost:4000/health 2>/dev/null; then
-                        echo "✅ Backend is healthy"
-                    else
-                        echo "⚠️ Backend health check failed"
+                    # Check if containers are running
+                    echo "=== CONTAINER STATUS ==="
+                    docker-compose ps
+                    
+                    # Check backend health
+                    echo "Checking backend health..."
+                    max_retries=10
+                    retry_count=0
+                    
+                    while [ $retry_count -lt $max_retries ]; do
+                        if curl -f http://localhost:4000/health 2>/dev/null; then
+                            echo "✅ Backend is healthy"
+                            break
+                        else
+                            echo "⚠️ Backend not ready yet (attempt $((retry_count+1))/$max_retries)"
+                            sleep 10
+                            retry_count=$((retry_count+1))
+                        fi
+                    done
+                    
+                    if [ $retry_count -eq $max_retries ]; then
+                        echo "❌ Backend health check failed after $max_retries attempts"
+                        echo "Backend logs:"
+                        docker-compose logs backend --tail=20
                     fi
                     
+                    # Check frontend
+                    echo "Checking frontend..."
                     if curl -I http://localhost:80 2>/dev/null; then
                         echo "✅ Frontend is reachable"
                     else
                         echo "⚠️ Frontend not reachable"
+                        echo "Frontend logs:"
+                        docker-compose logs frontend --tail=20
+                    fi
+                    
+                    # Check SonarQube
+                    echo "Checking SonarQube..."
+                    if curl -f http://localhost:9000 2>/dev/null; then
+                        echo "✅ SonarQube is running"
+                    else
+                        echo "⚠️ SonarQube not ready"
+                    fi
+                    
+                    # Check Jenkins
+                    echo "Checking Jenkins..."
+                    if curl -f http://localhost:8081 2>/dev/null; then
+                        echo "✅ Jenkins is running"
+                    else
+                        echo "⚠️ Jenkins not ready"
                     fi
                     
                     echo "=== DEPLOYMENT VERIFICATION COMPLETE ==="
@@ -143,10 +196,10 @@ pipeline {
                     fi
                     
                     echo "Scanning backend image..."
-                    trivy image --severity HIGH,CRITICAL food-backend:latest 2>/dev/null || echo "Security scan completed"
+                    trivy image --severity HIGH,CRITICAL food-delivery-devsecops-backend:latest 2>/dev/null || echo "Security scan completed"
                     
                     echo "Scanning frontend image..."
-                    trivy image --severity HIGH,CRITICAL food-frontend:latest 2>/dev/null || echo "Security scan completed"
+                    trivy image --severity HIGH,CRITICAL food-delivery-devsecops-frontend:latest 2>/dev/null || echo "Security scan completed"
                 '''
             }
         }
@@ -157,9 +210,12 @@ pipeline {
             echo "=== PIPELINE COMPLETED ==="
             
             sh '''
-                echo "Saving logs..."
-                docker-compose logs --tail=50 > deployment.log 2>&1 || true
+                echo "Saving deployment logs..."
+                docker-compose logs --tail=100 > deployment.log 2>&1 || true
                 echo "Logs saved to deployment.log"
+                
+                echo "=== FINAL CONTAINER STATUS ==="
+                docker-compose ps 2>/dev/null || docker ps --format "table {{.Names}}\t{{.Status}}"
             '''
             
             cleanWs()
@@ -175,11 +231,21 @@ pipeline {
             echo "Grafana:      http://localhost:3001 (admin/admin)"
             echo "Prometheus:   http://localhost:9090"
             echo ""
+            echo "=== USEFUL COMMANDS ==="
+            echo "View logs: docker-compose logs -f"
+            echo "Stop services: docker-compose down"
+            echo "Restart: docker-compose restart"
+            echo ""
             echo "All DevSecOps services are running!"
         }
         failure {
             echo "❌ Pipeline failed"
             echo "Check the logs above for details."
+            echo ""
+            echo "=== TROUBLESHOOTING ==="
+            echo "1. Check container logs: docker-compose logs"
+            echo "2. Check running containers: docker ps"
+            echo "3. Clean everything: docker system prune -af"
         }
     }
 }
