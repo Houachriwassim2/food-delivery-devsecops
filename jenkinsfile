@@ -1,17 +1,17 @@
 pipeline {
     agent any
-
+    
     environment {
         IMAGE_NAME = 'food-delivery'
         COMPOSE_FILE = 'docker-compose.yml'
     }
-
+    
     stages {
         stage('🔧 Setup Environment') {
             steps {
                 sh '''
                     echo "=== SETTING UP ENVIRONMENT ==="
-
+                    
                     if ! command -v node &> /dev/null; then
                         echo "Installing Node.js 18..."
                         apt-get update
@@ -19,40 +19,40 @@ pipeline {
                         curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
                         apt-get install -y nodejs
                     fi
-
+                    
                     echo "Node.js version: $(node --version)"
                     echo "npm version: $(npm --version)"
-
+                    
                     if ! command -v docker &> /dev/null; then
                         echo "Installing Docker..."
                         apt-get install -y docker.io
                     fi
-
+                    
                     echo "Docker version: $(docker --version 2>/dev/null || echo "Docker not found")"
-
+                    
                     if ! command -v docker-compose &> /dev/null; then
                         echo "Installing docker-compose..."
                         apt-get install -y docker-compose
                     fi
-
+                    
                     echo "docker-compose version: $(docker-compose --version 2>/dev/null || echo "docker-compose not found")"
                 '''
             }
         }
-
+        
         stage('🔍 Checkout') {
             steps {
                 checkout scm
                 script {
                     env.GIT_COMMIT_SHORT = sh(
-                        script: 'git rev-parse --short HEAD',
+                        script: "git rev-parse --short HEAD",
                         returnStdout: true
                     ).trim()
                     echo "Building commit: ${env.GIT_COMMIT_SHORT}"
                 }
             }
         }
-
+        
         stage('📦 Install Dependencies') {
             parallel {
                 stage('Backend') {
@@ -77,10 +77,10 @@ pipeline {
                 }
             }
         }
-
+        
         stage('🧪 Tests') {
             steps {
-                echo 'Running tests...'
+                echo "Running tests..."
                 dir('backend') {
                     sh 'npm test || echo "No tests in backend"'
                 }
@@ -89,131 +89,54 @@ pipeline {
                 }
             }
         }
-
+        
         stage('🐳 Build & Deploy') {
             steps {
-                script {
-                    echo '🚀 STARTING FINAL DEPLOYMENT PROCESS'
-
-                    // Étape 1: Nettoyage radical AVANT docker-compose
-                    sh '''
-                echo "=== STEP 1: RADICAL CLEANUP ==="
-
-                # 1. Arrêter TOUS les conteneurs (même ceux en cours)
-                echo "Stopping ALL containers (including running ones)..."
-                docker stop $(docker ps -aq) 2>/dev/null || echo "No containers to stop"
-
-                # 2. Supprimer TOUS les conteneurs
-                echo "Removing ALL containers..."
-                docker rm -f $(docker ps -aq) 2>/dev/null || echo "No containers to remove"
-
-                # 3. Vérifier et supprimer manuellement les conteneurs problématiques
-                echo "Force removing specific containers by name..."
-                for container_name in food-mongodb food-backend food-frontend food-sonarqube food-prometheus food-grafana food-jenkins; do
-                    docker rm -f $container_name 2>/dev/null || echo "Container $container_name not found or already removed"
-                done
-
-                # 4. Nettoyer docker-compose
-                echo "Cleaning docker-compose..."
-                docker-compose down --remove-orphans --volumes --rmi all 2>/dev/null || true
-
-                # 5. Nettoyer Docker système
-                echo "Cleaning Docker system..."
-                docker system prune -af 2>/dev/null || true
-
-                echo "=== VERIFICATION ==="
-                echo "Remaining containers (should be empty):"
-                docker ps -a
-                echo ""
-                echo "Containers with 'food-' in name (should be empty):"
-                docker ps -a --filter="name=food-" || echo "No food containers"
-            '''
-
-                    // Étape 2: Vérifier si le fichier .env existe
-                    sh '''
-                echo "=== STEP 2: CHECKING ENVIRONMENT ==="
-                if [ ! -f .env ]; then
-                    echo "Creating .env file..."
-                    cat > .env << EOF
-# MongoDB
-MONGO_USER=admin
-MONGO_PASSWORD=admin123
-
-# JWT
-JWT_SECRET=your-super-secret-jwt-key-change-in-production-12345
-
-# Node
-NODE_ENV=production
-EOF
-                    echo ".env file created successfully"
-                else
-                    echo ".env file already exists"
-                fi
-
-                echo "Environment variables:"
-                cat .env || echo "Cannot read .env"
-            '''
-
-                    // Étape 3: Construire les images
-                    sh '''
-                echo "=== STEP 3: BUILDING IMAGES ==="
-                docker-compose build --no-cache --pull
-                echo "✅ Build completed successfully!"
-            '''
-
-                    // Étape 4: Démarrer les services
-                    sh '''
-                echo "=== STEP 4: STARTING SERVICES ==="
-
-                # D'abord, vérifier qu'aucun conteneur n'existe avec nos noms
-                echo "Double-checking for existing containers..."
-                CONTAINER_NAMES="food-mongodb food-backend food-frontend food-sonarqube food-prometheus food-grafana food-jenkins"
-                for name in $CONTAINER_NAMES; do
-                    if docker ps -a --format "{{.Names}}" | grep -q "^${name}$"; then
-                        echo "⚠️ WARNING: Container $name still exists! Force removing..."
-                        docker rm -f $name
-                    fi
-                done
-
-                # Démarrer docker-compose
-                echo "Starting services with docker-compose..."
-                docker-compose up -d
-
-                # Attendre
-                echo "Waiting for services to initialize (60 seconds)..."
-                sleep 60
-
-                # Vérification
-                echo "=== DEPLOYMENT STATUS ==="
-                echo "1. All containers:"
-                docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
-
-                echo ""
-                echo "2. Our specific containers:"
-                docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" | grep -E "(food-|NAME)"
-
-                echo ""
-                echo "3. Docker-compose status:"
-                docker-compose ps 2>/dev/null || echo "docker-compose ps not available"
-            '''
-                }
+                sh '''
+                    echo "Building and deploying with Docker Compose..."
+                    
+                    # Stop and remove ALL containers
+                    echo "Stopping existing containers..."
+                    docker-compose down --remove-orphans --volumes --timeout 30 || true
+                    
+                    # Clean up old containers
+                    echo "Cleaning up old containers..."
+                    docker container prune -f || true
+                    
+                    # Build images
+                    echo "Building Docker images..."
+                    docker-compose build --no-cache --pull || echo "Build completed"
+                    
+                    # Start services with force recreation
+                    echo "Starting services..."
+                    docker-compose up -d --force-recreate --remove-orphans
+                    
+                    echo "Waiting for services to start..."
+                    sleep 45
+                    
+                    echo "=== SERVICES STATUS ==="
+                    docker-compose ps
+                    
+                    echo "=== RUNNING CONTAINERS ==="
+                    docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+                '''
             }
         }
-
+        
         stage('✅ Verify Deployment') {
             steps {
                 sh '''
                     echo "Verifying deployment..."
-
+                    
                     # Check if containers are running
                     echo "=== CONTAINER STATUS ==="
                     docker-compose ps
-
+                    
                     # Check backend health
                     echo "Checking backend health..."
                     max_retries=10
                     retry_count=0
-
+                    
                     while [ $retry_count -lt $max_retries ]; do
                         if curl -f http://localhost:4000/health 2>/dev/null; then
                             echo "✅ Backend is healthy"
@@ -224,13 +147,13 @@ EOF
                             retry_count=$((retry_count+1))
                         fi
                     done
-
+                    
                     if [ $retry_count -eq $max_retries ]; then
                         echo "❌ Backend health check failed after $max_retries attempts"
                         echo "Backend logs:"
                         docker-compose logs backend --tail=20
                     fi
-
+                    
                     # Check frontend
                     echo "Checking frontend..."
                     if curl -I http://localhost:80 2>/dev/null; then
@@ -240,7 +163,7 @@ EOF
                         echo "Frontend logs:"
                         docker-compose logs frontend --tail=20
                     fi
-
+                    
                     # Check SonarQube
                     echo "Checking SonarQube..."
                     if curl -f http://localhost:9000 2>/dev/null; then
@@ -248,7 +171,7 @@ EOF
                     else
                         echo "⚠️ SonarQube not ready"
                     fi
-
+                    
                     # Check Jenkins
                     echo "Checking Jenkins..."
                     if curl -f http://localhost:8081 2>/dev/null; then
@@ -256,73 +179,73 @@ EOF
                     else
                         echo "⚠️ Jenkins not ready"
                     fi
-
+                    
                     echo "=== DEPLOYMENT VERIFICATION COMPLETE ==="
                 '''
             }
         }
-
+        
         stage('🔒 Security Scan') {
             steps {
                 sh '''
                     echo "Performing security scan..."
-
+                    
                     if ! command -v trivy &> /dev/null; then
                         echo "Installing Trivy..."
                         curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
                     fi
-
+                    
                     echo "Scanning backend image..."
                     trivy image --severity HIGH,CRITICAL food-delivery-devsecops-backend:latest 2>/dev/null || echo "Security scan completed"
-
+                    
                     echo "Scanning frontend image..."
                     trivy image --severity HIGH,CRITICAL food-delivery-devsecops-frontend:latest 2>/dev/null || echo "Security scan completed"
                 '''
             }
         }
     }
-
+    
     post {
         always {
-            echo '=== PIPELINE COMPLETED ==='
-
+            echo "=== PIPELINE COMPLETED ==="
+            
             sh '''
                 echo "Saving deployment logs..."
                 docker-compose logs --tail=100 > deployment.log 2>&1 || true
                 echo "Logs saved to deployment.log"
-
+                
                 echo "=== FINAL CONTAINER STATUS ==="
                 docker-compose ps 2>/dev/null || docker ps --format "table {{.Names}}\t{{.Status}}"
             '''
-
+            
             cleanWs()
         }
         success {
-            echo '🎉🎉🎉 PIPELINE SUCCESSFUL! 🎉🎉🎉'
-            echo ''
-            echo '=== ACCESS URLs ==='
-            echo 'Frontend:     http://localhost:80'
-            echo 'Backend API:  http://localhost:4000'
-            echo 'SonarQube:    http://localhost:9000 (admin/admin)'
-            echo 'Jenkins:      http://localhost:8081'
-            echo 'Grafana:      http://localhost:3001 (admin/admin)'
-            echo 'Prometheus:   http://localhost:9090'
-            echo ''
-            echo '=== USEFUL COMMANDS ==='
-            echo 'View logs: docker-compose logs -f'
-            echo 'Stop services: docker-compose down'
-            echo 'Restart: docker-compose restart'
-            echo ''
-            echo 'All DevSecOps services are running!'
+            echo "🎉🎉🎉 PIPELINE SUCCESSFUL! 🎉🎉🎉"
+            echo ""
+            echo "=== ACCESS URLs ==="
+            echo "Frontend:     http://localhost:80"
+            echo "Backend API:  http://localhost:4000"
+            echo "SonarQube:    http://localhost:9000 (admin/admin)"
+            echo "Jenkins:      http://localhost:8081"
+            echo "Grafana:      http://localhost:3001 (admin/admin)"
+            echo "Prometheus:   http://localhost:9090"
+            echo ""
+            echo "=== USEFUL COMMANDS ==="
+            echo "View logs: docker-compose logs -f"
+            echo "Stop services: docker-compose down"
+            echo "Restart: docker-compose restart"
+            echo ""
+            echo "All DevSecOps services are running!"
         }
         failure {
-            echo '❌ Pipeline failed'
-            echo 'Check the logs above for details.'
-            echo ''
-            echo '=== TROUBLESHOOTING ==='
-            echo '1. Check container logs: docker-compose logs'
-            echo '2. Check running containers: docker ps'
-            echo '3. Clean everything: docker system prune -af'
+            echo "❌ Pipeline failed"
+            echo "Check the logs above for details."
+            echo ""
+            echo "=== TROUBLESHOOTING ==="
+            echo "1. Check container logs: docker-compose logs"
+            echo "2. Check running containers: docker ps"
+            echo "3. Clean everything: docker system prune -af"
         }
     }
 }
