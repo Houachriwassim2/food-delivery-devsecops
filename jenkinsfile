@@ -10,13 +10,12 @@ pipeline {
     }
 
     stages {
-
         stage('🔍 Checkout') {
             steps {
                 checkout scm
                 script {
                     env.GIT_COMMIT_SHORT = sh(
-                        script: "git rev-parse --short HEAD",
+                        script: 'git rev-parse --short HEAD',
                         returnStdout: true
                     ).trim()
                 }
@@ -63,13 +62,14 @@ pipeline {
 
         stage('🔐 SAST - SonarQube') {
             steps {
+                tool 'SonarScanner'
                 withSonarQubeEnv('SonarQube') {
                     sh '''
-                    sonar-scanner \
-                      -Dsonar.projectKey=food-delivery \
-                      -Dsonar.sources=backend,frontend \
-                      -Dsonar.exclusions=**/node_modules/**
-                    '''
+              sonar-scanner \
+              -Dsonar.projectKey=food-delivery \
+              -Dsonar.sources=backend,frontend \
+              -Dsonar.exclusions=**/node_modules/**
+            '''
                 }
             }
         }
@@ -77,8 +77,8 @@ pipeline {
         stage('🐳 Build Docker Images') {
             steps {
                 script {
-                    docker.build("${IMAGE_NAME}-backend:${GIT_COMMIT_SHORT}", "backend")
-                    docker.build("${IMAGE_NAME}-frontend:${GIT_COMMIT_SHORT}", "frontend")
+                    docker.build("${IMAGE_NAME}-backend:${GIT_COMMIT_SHORT}", 'backend')
+                    docker.build("${IMAGE_NAME}-frontend:${GIT_COMMIT_SHORT}", 'frontend')
                 }
             }
         }
