@@ -62,14 +62,16 @@ pipeline {
 
         stage('🔐 SAST - SonarQube') {
             steps {
-                tool 'SonarQube'
-                withSonarQubeEnv('SonarQube') {
-                    sh '''
-              sonar-scanner \
-              -Dsonar.projectKey=food-delivery \
-              -Dsonar.sources=backend,frontend \
-              -Dsonar.exclusions=**/node_modules/**
-            '''
+                script {
+                    def scannerHome = tool 'SonarQube'
+                    withSonarQubeEnv('SonarQube') {
+                        sh """
+                  ${scannerHome}/bin/sonar-scanner \
+                  -Dsonar.projectKey=food-delivery \
+                  -Dsonar.sources=backend,frontend \
+                  -Dsonar.exclusions=**/node_modules/**
+                """
+                    }
                 }
             }
         }
