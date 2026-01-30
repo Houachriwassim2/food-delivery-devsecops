@@ -1,54 +1,71 @@
 pipeline {
     agent any
-    
+
     environment {
         DOCKER_REGISTRY = 'localhost:5000'
         IMAGE_NAME = 'food-delivery'
         SONAR_HOST = 'http://food-sonarqube:9000'
         GIT_COMMIT_SHORT = ''
     }
-    
+
     tools {
         nodejs 'NodeJS-18'
     }
-    
+
     stages {
         // ==================== ÉTAPE 1: CHECKOUT ====================
         stage('🔍 Checkout') {
             steps {
                 checkout scm
                 script {
-                    env.GIT_COMMIT_SHORT = sh(
-                        script: "git rev-parse --short HEAD",
-                        returnStdout: true
-                    ).trim()
+                    // Récupérer le commit SHA correctement
+                    def commit = sh(script: 'git rev-parse --short HEAD', returnStdout: true).trim()
+                    env.GIT_COMMIT_SHORT = commit
                     echo "Building commit: ${env.GIT_COMMIT_SHORT}"
                 }
             }
         }
-        
+
+        stage('🧹 Clean Before Deploy') {
+            steps {
+                sh '''
+            echo "Nettoyage avant déploiement..."
+            # Arrêter tous les conteneurs food-*
+            docker ps -a --filter "name=food-" -q | xargs -r docker rm -f 2>/dev/null || true
+
+            # Supprimer les images anciennes
+            docker images "food-delivery-*" -q | xargs -r docker rmi -f 2>/dev/null || true
+
+            # Supprimer les réseaux
+            docker network ls --filter "name=food" -q | xargs -r docker network rm 2>/dev/null || true
+
+            echo "Nettoyage terminé"
+        '''
+            }
+        }
+
         // ==================== ÉTAPE 2: SETUP ENV ====================
         stage('🔧 Setup Environment') {
             steps {
                 sh '''
                     echo "=== INSTALLATION DES OUTILS ==="
-                    
+
                     # Mettre à jour et installer les dépendances
                     apt-get update
-                    
+
                     # Installer Node.js si pas déjà installé
                     if ! command -v node &> /dev/null; then
                         echo "Installation de Node.js 18..."
                         curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
                         apt-get install -y nodejs
                     fi
-                    
+
                     # Installer Docker si pas déjà installé
                     if ! command -v docker &> /dev/null; then
                         echo "Installation de Docker..."
                         apt-get install -y docker.io docker-compose
                     fi
-                    
+
                     # Vérifier les versions
                     echo "=== VÉRIFICATION DES VERSIONS ==="
                     node --version
@@ -58,7 +75,7 @@ pipeline {
                 '''
             }
         }
-        
+
         // ==================== ÉTAPE 3: INSTALL DEPS ====================
         stage('📦 Install Dependencies') {
             parallel {
@@ -66,13 +83,20 @@ pipeline {
                     steps {
                         dir('backend') {
                             sh '''
-                                echo "Installation des dépendances backend..."
-                                npm ci --no-audit --no-fund
-                            '''
+                echo "Installation des dépendances backend..."
+                # Désactiver SSL pour npm (problème de certificat)
+                npm config set strict-ssl false
+
+                # Essayer npm ci d'abord
+                npm ci --no-audit --no-fund --legacy-peer-deps || {
+                    echo "npm ci a échoué, tentative avec npm install..."
+                    npm install --no-audit --no-fund --legacy-peer-deps
+                }
+            '''
                         }
                     }
                 }
-                
+
                 stage('Frontend') {
                     steps {
                         dir('frontend') {
@@ -85,7 +109,7 @@ pipeline {
                 }
             }
         }
-        
+
         // ==================== ÉTAPE 4: AUDIT DES DÉPENDANCES ====================
         stage('📋 Security Audit') {
             parallel {
@@ -100,7 +124,7 @@ pipeline {
                         }
                     }
                 }
-                
+
                 stage('Frontend Audit') {
                     steps {
                         dir('frontend') {
@@ -114,7 +138,7 @@ pipeline {
                 }
             }
         }
-        
+
         // ==================== ÉTAPE 5: TESTS UNITAIRES ====================
         stage('🧪 Unit Tests') {
             parallel {
@@ -147,7 +171,7 @@ pipeline {
                         }
                     }
                 }
-                
+
                 stage('Frontend Tests') {
                     steps {
                         dir('frontend') {
@@ -179,20 +203,20 @@ pipeline {
                 }
             }
         }
-        
+
         // ==================== ÉTAPE 6: SAST (SonarQube) ====================
         stage('🔬 SAST - SonarQube Analysis') {
             steps {
                 script {
-                    echo "Démarrage de SonarQube..."
-                    
+                    echo 'Démarrage de SonarQube...'
+
                     // Démarrer SonarQube
                     sh '''
                         docker-compose up -d sonarqube || true
                         echo "Attente du démarrage de SonarQube..."
                         sleep 60
                     '''
-                    
+
                     // Configuration pour éviter l'erreur si SonarQube n'est pas configuré
                     try {
                         withSonarQubeEnv('SonarQube') {
@@ -212,23 +236,23 @@ pipeline {
                         }
                     } catch (Exception e) {
                         echo "SonarQube non configuré ou erreur: ${e.getMessage()}"
-                        echo "Continuer sans SonarQube..."
+                        echo 'Continuer sans SonarQube...'
                     }
                 }
             }
         }
-        
+
         // ==================== ÉTAPE 7: BUILD DOCKER IMAGES ====================
         stage('🐳 Build Docker Images') {
             steps {
                 script {
-                    echo "Construction des images Docker..."
-                    
+                    echo 'Construction des images Docker...'
+
                     // Nettoyer les anciennes images
                     sh '''
                         docker system prune -f || true
                     '''
-                    
+
                     // Backend
                     sh '''
                         docker build \\
@@ -236,7 +260,7 @@ pipeline {
                             -t ${IMAGE_NAME}-backend:latest \\
                             ./backend
                     '''
-                    
+
                     // Frontend
                     sh '''
                         docker build \\
@@ -244,7 +268,7 @@ pipeline {
                             -t ${IMAGE_NAME}-frontend:latest \\
                             ./frontend
                     '''
-                    
+
                     // Lister les images
                     sh '''
                         echo "=== IMAGES CONSTRUITES ==="
@@ -253,13 +277,13 @@ pipeline {
                 }
             }
         }
-        
+
         // ==================== ÉTAPE 8: CONTAINER SECURITY SCAN ====================
         stage('🔒 Container Security Scan') {
             steps {
                 script {
-                    echo "Scan de sécurité des images..."
-                    
+                    echo 'Scan de sécurité des images...'
+
                     // Installation simplifiée de Trivy
                     sh '''
                         # Vérifier si Trivy est installé
@@ -268,28 +292,28 @@ pipeline {
                             wget https://github.com/aquasecurity/trivy/releases/download/v0.54.1/trivy_0.54.1_Linux-64bit.deb
                             dpkg -i trivy_0.54.1_Linux-64bit.deb || true
                         fi
-                        
+
                         # Scan backend
                         echo "Scan de l'image backend..."
                         trivy image --severity HIGH,CRITICAL ${IMAGE_NAME}-backend:latest > trivy-backend.txt 2>&1 || true
-                        
+
                         # Scan frontend
                         echo "Scan de l'image frontend..."
                         trivy image --severity HIGH,CRITICAL ${IMAGE_NAME}-frontend:latest > trivy-frontend.txt 2>&1 || true
-                        
+
                         # Créer des rapports HTML simples
                         echo "<html><body><h1>Trivy Scan Report - Backend</h1><pre>" > trivy-backend.html
                         cat trivy-backend.txt >> trivy-backend.html
                         echo "</pre></body></html>" >> trivy-backend.html
-                        
+
                         echo "<html><body><h1>Trivy Scan Report - Frontend</h1><pre>" > trivy-frontend.html
                         cat trivy-frontend.txt >> trivy-frontend.html
                         echo "</pre></body></html>" >> trivy-frontend.html
                     '''
-                    
+
                     // Archiver les rapports
                     archiveArtifacts artifacts: 'trivy-*.txt,trivy-*.html'
-                    
+
                     // Publier les rapports HTML
                     publishHTML([
                         reportDir: '.',
@@ -299,7 +323,7 @@ pipeline {
                         allowMissing: true,
                         keepAll: true
                     ])
-                    
+
                     publishHTML([
                         reportDir: '.',
                         reportFiles: 'trivy-frontend.html',
@@ -311,35 +335,35 @@ pipeline {
                 }
             }
         }
-        
+
         // ==================== ÉTAPE 9: DÉPLOIEMENT ====================
         stage('🚀 Deploy Application') {
             steps {
                 script {
                     echo "Déploiement de l'application..."
-                    
+
                     sh '''
                         # Arrêter les anciens conteneurs
                         docker-compose down --remove-orphans --volumes --timeout 30 2>/dev/null || true
-                        
+
                         # Nettoyer les conteneurs arrêtés
                         docker container prune -f 2>/dev/null || true
-                        
+
                         # Supprimer les conteneurs en conflit
                         docker rm -f food-grafana food-sonarqube food-jenkins food-prometheus food-mongodb food-backend food-frontend 2>/dev/null || true
-                        
+
                         # Nettoyer les réseaux
                         docker network prune -f 2>/dev/null || true
-                        
+
                         echo "Démarrage des services..."
                         docker-compose up -d --build --force-recreate
-                        
+
                         echo "Attente du démarrage..."
                         sleep 30
-                        
+
                         echo "=== ÉTAT DES SERVICES ==="
                         docker-compose ps
-                        
+
                         echo "=== VÉRIFICATION DE SANTÉ ==="
                         curl -f http://localhost:80 || echo "Frontend accessible"
                         curl -f http://localhost:4000/health || echo "Backend health check"
@@ -347,23 +371,23 @@ pipeline {
                 }
             }
         }
-        
+
         // ==================== ÉTAPE 10: DAST (OWASP ZAP) ====================
         stage('🛡️ DAST - Security Testing') {
             steps {
                 script {
-                    echo "Tests de sécurité dynamique..."
-                    
+                    echo 'Tests de sécurité dynamique...'
+
                     // CORRECTION ICI : Utiliser des guillemets doubles et échapper le backslash
                     sh """
                         # Tester si l'application est accessible
                         if curl -f http://localhost:80 2>/dev/null; then
                             echo "Application accessible, exécution des tests de sécurité..."
-                            
+
                             # Test simple avec curl pour vérifier les headers de sécurité
                             echo "=== VÉRIFICATION DES HEADERS DE SÉCURITÉ ==="
                             curl -I http://localhost:80 2>/dev/null | grep -i "security\\|x-" || echo "Pas de headers de sécurité détectés"
-                            
+
                             # Créer un rapport simple
                             echo "<html><body><h1>Security Test Report</h1><p>Tests de sécurité basiques exécutés</p></body></html>" > security-report.html
                         else
@@ -371,7 +395,7 @@ pipeline {
                             echo "<html><body><h1>Security Test Report</h1><p>Application non accessible pour les tests DAST</p></body></html>" > security-report.html
                         fi
                     """
-                    
+
                     // Publier le rapport
                     publishHTML([
                         reportDir: '.',
@@ -384,16 +408,16 @@ pipeline {
                 }
             }
         }
-        
+
         // ==================== ÉTAPE 11: MONITORING ====================
         stage('📊 Monitoring') {
             steps {
                 sh '''
                     echo "Configuration du monitoring..."
-                    
+
                     # Démarrer les services de monitoring si disponibles
                     docker-compose up -d prometheus grafana 2>/dev/null || echo "Services de monitoring non disponibles"
-                    
+
                     # Créer un rapport de monitoring
                     echo "<html><body>
                         <h1>Monitoring Dashboard</h1>
@@ -405,12 +429,12 @@ pipeline {
                         </ul>
                         <h2>Statut des Services</h2>
                         <pre>" > monitoring-report.html
-                    
+
                     docker-compose ps 2>/dev/null >> monitoring-report.html || echo "Impossible de récupérer le statut" >> monitoring-report.html
-                    
+
                     echo "</pre></body></html>" >> monitoring-report.html
                 '''
-                
+
                 // Publier le rapport de monitoring
                 publishHTML([
                     reportDir: '.',
@@ -423,32 +447,32 @@ pipeline {
             }
         }
     }
-    
+
     post {
         always {
-            echo "=== FIN DU PIPELINE ==="
-            
+            echo '=== FIN DU PIPELINE ==='
+
             sh '''
                 echo "Sauvegarde des logs..."
                 docker-compose logs --tail=50 > deployment-logs.log 2>&1 || true
-                
+
                 echo "=== ÉTAT FINAL ==="
                 echo "Conteneurs en cours d'exécution:"
                 docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}" || true
-                
+
                 echo "=== RAPPORTS DISPONIBLES ==="
                 ls -la *.html *.json *.txt 2>/dev/null || true
             '''
-            
+
             // Archiver tous les artefacts
             archiveArtifacts artifacts: '*.log,*.txt,*.html,*.json'
-            
+
             // Nettoyer l'espace de travail
             cleanWs()
         }
-        
+
         success {
-            echo "✅ PIPELINE RÉUSSI!"
+            echo '✅ PIPELINE RÉUSSI!'
             sh '''
                 echo "=== RÉSUMÉ ==="
                 echo "Commit: ${GIT_COMMIT_SHORT}"
@@ -458,9 +482,9 @@ pipeline {
                 echo "Application disponible sur: http://localhost:80"
             '''
         }
-        
+
         failure {
-            echo "❌ PIPELINE ÉCHOUÉ!"
+            echo '❌ PIPELINE ÉCHOUÉ!'
             sh '''
                 echo "=== DÉBOGAGE ==="
                 echo "1. Vérifier les logs: docker-compose logs"
@@ -468,9 +492,9 @@ pipeline {
                 echo "3. Nettoyer: docker system prune -af"
             '''
         }
-        
+
         aborted {
-            echo "⏸️ PIPELINE INTERROMPU"
+            echo '⏸️ PIPELINE INTERROMPU'
         }
     }
 }
