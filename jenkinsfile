@@ -13,20 +13,16 @@ pipeline {
     
     stages {
         stage('🔧 Setup Node.js') {
-            steps {
-                sh '''
-                    if ! command -v node &> /dev/null; then
-                        echo "Installing Node.js 18..."
-                        apt-get update
-                        apt-get install -y curl
-                        curl -fsSL https://deb.nodesource.com/setup_18.x | bash -
-                        apt-get install -y nodejs
-                    fi
-                    node --version
-                    npm --version
-                '''
-            }
-        }
+    steps {
+        sh '''
+            echo "Using Node.js from Jenkins tool:"
+            echo "Node version:"
+            ${NODEJS_HOME}/bin/node -v
+            echo "NPM version:"
+            ${NODEJS_HOME}/bin/npm -v
+        '''
+    }
+}
         
         stage('🔍 Checkout') {
             steps {
