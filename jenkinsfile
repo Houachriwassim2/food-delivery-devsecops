@@ -90,38 +90,60 @@ pipeline {
             }
         }
         
-        stage('🐳 Build & Deploy') {
-            steps {
-                sh '''
-                    echo "Building and deploying with Docker Compose..."
-                    
-                    # Stop and remove ALL containers
-                    echo "Stopping existing containers..."
-                    docker-compose down --remove-orphans --volumes --timeout 30 || true
-                    
-                    # Clean up old containers
-                    echo "Cleaning up old containers..."
-                    docker container prune -f || true
-                    
-                    # Build images
-                    echo "Building Docker images..."
-                    docker-compose build --no-cache --pull || echo "Build completed"
-                    
-                    # Start services with force recreation
-                    echo "Starting services..."
-                    docker-compose up -d --force-recreate --remove-orphans
-                    
-                    echo "Waiting for services to start..."
-                    sleep 45
-                    
-                    echo "=== SERVICES STATUS ==="
-                    docker-compose ps
-                    
-                    echo "=== RUNNING CONTAINERS ==="
-                    docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
-                '''
-            }
-        }
+      stage('🐳 Build & Deploy') {
+    steps {
+        sh '''
+            echo "🚀 STARTING FULL DEPLOYMENT PROCESS"
+            
+            # Étape 0: Vérifier les variables d'environnement
+            echo "Checking environment variables..."
+            if [ ! -f .env ]; then
+                echo "Creating .env file from template..."
+                echo "MONGO_USER=admin" > .env
+                echo "MONGO_PASSWORD=admin123" >> .env
+                echo "JWT_SECRET=your-super-secret-jwt-key" >> .env
+                echo "NODE_ENV=production" >> .env
+            fi
+            
+            # Étape 1: Nettoyage radical
+            echo "=== RADICAL CLEANUP ==="
+            echo "1. Stopping all containers..."
+            docker ps -q | xargs -r docker stop 2>/dev/null || echo "No running containers"
+            
+            echo "2. Removing all containers..."
+            docker ps -aq | xargs -r docker rm -f 2>/dev/null || echo "No containers to remove"
+            
+            echo "3. Force removing our specific containers..."
+            for name in food-mongodb food-backend food-frontend food-sonarqube food-prometheus food-grafana food-jenkins; do
+                docker rm -f $name 2>/dev/null || true
+            done
+            
+            echo "4. Cleaning networks and volumes..."
+            docker network prune -f 2>/dev/null || true
+            docker volume prune -f 2>/dev/null || true
+            
+            # Étape 2: Construction
+            echo "=== BUILDING IMAGES ==="
+            docker-compose build --no-cache
+            
+            # Étape 3: Déploiement
+            echo "=== DEPLOYING SERVICES ==="
+            docker-compose up -d
+            
+            # Étape 4: Vérification
+            echo "=== VERIFICATION ==="
+            echo "Waiting 30 seconds for services to start..."
+            sleep 30
+            
+            echo "Current containers:"
+            docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+            
+            echo ""
+            echo "Docker-compose status:"
+            docker-compose ps || echo "docker-compose ps failed"
+        '''
+    }
+}
         
         stage('✅ Verify Deployment') {
             steps {
