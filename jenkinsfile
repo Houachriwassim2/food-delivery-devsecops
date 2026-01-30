@@ -199,14 +199,14 @@ pipeline {
                             sh '''
                                 echo "Exécution de l'analyse SonarQube..."
                                 # Si sonar-scanner n'est pas installé, on utilise une image Docker
-                                docker run --rm \
-                                    -e SONAR_HOST_URL=${SONAR_HOST} \
-                                    -e SONAR_SCANNER_OPTS="-Dsonar.projectKey=food-delivery" \
-                                    -v "$(pwd):/usr/src" \
-                                    sonarsource/sonar-scanner-cli:latest \
-                                    -Dsonar.projectKey=food-delivery \
-                                    -Dsonar.sources=backend,frontend/src \
-                                    -Dsonar.exclusions="**/node_modules/**,**/dist/**" \
+                                docker run --rm \\
+                                    -e SONAR_HOST_URL=${SONAR_HOST} \\
+                                    -e SONAR_SCANNER_OPTS="-Dsonar.projectKey=food-delivery" \\
+                                    -v "$(pwd):/usr/src" \\
+                                    sonarsource/sonar-scanner-cli:latest \\
+                                    -Dsonar.projectKey=food-delivery \\
+                                    -Dsonar.sources=backend,frontend/src \\
+                                    -Dsonar.exclusions="**/node_modules/**,**/dist/**" \\
                                     -Dsonar.host.url=${SONAR_HOST} || echo "SonarQube scan completed (may have warnings)"
                             '''
                         }
@@ -231,17 +231,17 @@ pipeline {
                     
                     // Backend
                     sh '''
-                        docker build \
-                            -t ${IMAGE_NAME}-backend:${GIT_COMMIT_SHORT} \
-                            -t ${IMAGE_NAME}-backend:latest \
+                        docker build \\
+                            -t ${IMAGE_NAME}-backend:${GIT_COMMIT_SHORT} \\
+                            -t ${IMAGE_NAME}-backend:latest \\
                             ./backend
                     '''
                     
                     // Frontend
                     sh '''
-                        docker build \
-                            -t ${IMAGE_NAME}-frontend:${GIT_COMMIT_SHORT} \
-                            -t ${IMAGE_NAME}-frontend:latest \
+                        docker build \\
+                            -t ${IMAGE_NAME}-frontend:${GIT_COMMIT_SHORT} \\
+                            -t ${IMAGE_NAME}-frontend:latest \\
                             ./frontend
                     '''
                     
@@ -354,14 +354,15 @@ pipeline {
                 script {
                     echo "Tests de sécurité dynamique..."
                     
-                    sh '''
+                    // CORRECTION ICI : Utiliser des guillemets doubles et échapper le backslash
+                    sh """
                         # Tester si l'application est accessible
                         if curl -f http://localhost:80 2>/dev/null; then
                             echo "Application accessible, exécution des tests de sécurité..."
                             
                             # Test simple avec curl pour vérifier les headers de sécurité
                             echo "=== VÉRIFICATION DES HEADERS DE SÉCURITÉ ==="
-                            curl -I http://localhost:80 2>/dev/null | grep -i "security\|x-" || echo "Pas de headers de sécurité détectés"
+                            curl -I http://localhost:80 2>/dev/null | grep -i "security\\|x-" || echo "Pas de headers de sécurité détectés"
                             
                             # Créer un rapport simple
                             echo "<html><body><h1>Security Test Report</h1><p>Tests de sécurité basiques exécutés</p></body></html>" > security-report.html
@@ -369,7 +370,7 @@ pipeline {
                             echo "Application non accessible, skip des tests DAST"
                             echo "<html><body><h1>Security Test Report</h1><p>Application non accessible pour les tests DAST</p></body></html>" > security-report.html
                         fi
-                    '''
+                    """
                     
                     // Publier le rapport
                     publishHTML([
@@ -398,9 +399,9 @@ pipeline {
                         <h1>Monitoring Dashboard</h1>
                         <h2>URLs de Monitoring</h2>
                         <ul>
-                            <li><a href='http://localhost:9090' target='_blank'>Prometheus</a></li>
-                            <li><a href='http://localhost:3000' target='_blank'>Grafana (admin/admin)</a></li>
-                            <li><a href='http://localhost:9000' target='_blank'>SonarQube</a></li>
+                            <li><a href=\'http://localhost:9090\' target=\'_blank\'>Prometheus</a></li>
+                            <li><a href=\'http://localhost:3000\' target=\'_blank\'>Grafana (admin/admin)</a></li>
+                            <li><a href=\'http://localhost:9000\' target=\'_blank\'>SonarQube</a></li>
                         </ul>
                         <h2>Statut des Services</h2>
                         <pre>" > monitoring-report.html
