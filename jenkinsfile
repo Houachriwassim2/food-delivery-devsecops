@@ -2,9 +2,7 @@ pipeline {
     agent any
 
     environment {
-        DOCKER_REGISTRY = ''
         IMAGE_NAME = 'food-delivery'
-        SONAR_HOST = 'http://sonarqube:9000'
     }
 
     tools {
@@ -12,24 +10,13 @@ pipeline {
     }
 
     stages {
-        stage('🔧 Setup Node.js') {
-            steps {
-                bat """
-                    echo Using Node.js from Jenkins tool:
-                    echo Node version:
-                    %NODEJS_HOME%\\node -v
-                    echo NPM version:
-                    %NODEJS_HOME%\\npm -v
-                """
-            }
-        }
 
         stage('🔍 Checkout') {
             steps {
                 checkout scm
                 script {
-                    env.GIT_COMMIT_SHORT = bat(
-                        script: 'git rev-parse --short HEAD',
+                    env.GIT_COMMIT_SHORT = sh(
+                        script: "git rev-parse --short HEAD",
                         returnStdout: true
                     ).trim()
                 }
@@ -41,24 +28,16 @@ pipeline {
                 stage('Backend') {
                     steps {
                         dir('backend') {
-                            bat '%NODEJS_HOME%\\npm ci --no-audit'
+                            sh 'npm ci --no-audit'
                         }
                     }
                 }
                 stage('Frontend') {
                     steps {
                         dir('frontend') {
-                            bat '%NODEJS_HOME%\\npm ci --no-audit'
+                            sh 'npm ci --no-audit'
                         }
                     }
-                }
-            }
-        }
-
-        stage('🔐 SAST - SonarQube Analysis') {
-            steps {
-                withSonarQubeEnv('SonarQubeServer') {
-                    bat '%SONAR_SCANNER_HOME%\\bin\\sonar-scanner.bat -Dsonar.projectKey=food-delivery -Dsonar.sources=backend,frontend/src -Dsonar.exclusions=**/node_modules/**,**/dist/** -Dsonar.javascript.lcov.reportPaths=coverage/lcov.info'
                 }
             }
         }
@@ -68,68 +47,60 @@ pipeline {
                 stage('Backend Tests') {
                     steps {
                         dir('backend') {
-                            bat '%NODEJS_HOME%\\npm test -- --coverage --coverageReporters=lcov || exit 0'
+                            sh 'npm test -- --coverage || true'
                         }
                     }
                 }
                 stage('Frontend Tests') {
                     steps {
                         dir('frontend') {
-                            bat '%NODEJS_HOME%\\npm test -- --coverage --watchAll=false || exit 0'
+                            sh 'npm test -- --watchAll=false || true'
                         }
                     }
                 }
             }
         }
 
-        stage('📊 Publish Test Reports') {
+        stage('🔐 SAST - SonarQube') {
             steps {
-                // Backend coverage report
-                publishHTML([
-                    target: [
-                        allowMissing: true,
-                        alwaysLinkToLastBuild: true,
-                        keepAll: true,
-                        reportDir: 'backend\\coverage\\lcov-report',
-                        reportFiles: 'index.html',
-                        reportName: 'Backend Coverage'
-                    ]
-                ])
-
-                // Frontend coverage report
-                publishHTML([
-                    target: [
-                        allowMissing: true,
-                        alwaysLinkToLastBuild: true,
-                        keepAll: true,
-                        reportDir: 'frontend\\coverage',
-                        reportFiles: 'index.html',
-                        reportName: 'Frontend Coverage'
-                    ]
-                ])
+                withSonarQubeEnv('SonarQubeServer') {
+                    sh '''
+                    sonar-scanner \
+                      -Dsonar.projectKey=food-delivery \
+                      -Dsonar.sources=backend,frontend \
+                      -Dsonar.exclusions=**/node_modules/**
+                    '''
+                }
             }
         }
 
         stage('🐳 Build Docker Images') {
             steps {
                 script {
-                    bat "docker build -t ${IMAGE_NAME}-backend:${GIT_COMMIT_SHORT} .\\backend"
-                    bat "docker build -t ${IMAGE_NAME}-frontend:${GIT_COMMIT_SHORT} .\\frontend"
+                    docker.build("${IMAGE_NAME}-backend:${GIT_COMMIT_SHORT}", "backend")
+                    docker.build("${IMAGE_NAME}-frontend:${GIT_COMMIT_SHORT}", "frontend")
                 }
             }
         }
 
-        stage('🔒 Container Security Scan') {
+        stage('🔒 Container Security Scan (Trivy)') {
             steps {
-                bat """
-                    if not exist "%ProgramFiles%\\Trivy\\trivy.exe" (
-                        echo Trivy not found, please install Trivy on Windows and add it to PATH
-                        exit 0
-                    )
-                    trivy.exe image --severity HIGH,CRITICAL --format json --output trivy-backend.json ${IMAGE_NAME}-backend:${GIT_COMMIT_SHORT} || exit 0
-                    trivy.exe image --severity HIGH,CRITICAL --format json --output trivy-frontend.json ${IMAGE_NAME}-frontend:${GIT_COMMIT_SHORT} || exit 0
-                """
-                archiveArtifacts artifacts: 'trivy-*.json'
+                sh '''
+                if ! command -v trivy &> /dev/null; then
+                    curl -sfL https://raw.githubusercontent.com/aquasecurity/trivy/main/contrib/install.sh | sh -s -- -b /usr/local/bin
+                fi
+
+                trivy image --severity HIGH,CRITICAL \
+                  --format json \
+                  --output trivy-backend.json \
+                  ${IMAGE_NAME}-backend:${GIT_COMMIT_SHORT} || true
+
+                trivy image --severity HIGH,CRITICAL \
+                  --format json \
+                  --output trivy-frontend.json \
+                  ${IMAGE_NAME}-frontend:${GIT_COMMIT_SHORT} || true
+                '''
+                archiveArtifacts artifacts: 'trivy-*.json', fingerprint: true
             }
         }
 
@@ -138,57 +109,60 @@ pipeline {
                 branch 'develop'
             }
             steps {
-                bat """
-                    docker run --rm -v %cd%:/zap/wrk:rw owasp/zap2docker-stable zap-baseline.py -t http://localhost:80 -r zap-report.html -J zap-report.json || exit 0
-                """
+                sh '''
+                docker run --rm -v $(pwd):/zap/wrk \
+                  owasp/zap2docker-stable zap-baseline.py \
+                  -t http://localhost \
+                  -r zap-report.html || true
+                '''
                 publishHTML([
                     target: [
-                        allowMissing: true,
-                        alwaysLinkToLastBuild: true,
-                        keepAll: true,
+                        reportName: 'OWASP ZAP Report',
                         reportDir: '.',
                         reportFiles: 'zap-report.html',
-                        reportName: 'OWASP ZAP Security Report'
+                        keepAll: true,
+                        alwaysLinkToLastBuild: true,
+                        allowMissing: true
                     ]
                 ])
             }
         }
 
-        stage('🚀 Deploy to Staging') {
+        stage('🚀 Deploy (Staging)') {
             when {
                 branch 'develop'
             }
             steps {
-                bat """
-                    docker-compose -f docker-compose.staging.yml down || exit 0
-                    docker-compose -f docker-compose.staging.yml up -d
-                """
+                sh '''
+                docker-compose -f docker-compose.staging.yml down || true
+                docker-compose -f docker-compose.staging.yml up -d
+                '''
             }
         }
 
-        stage('🚀 Deploy to Production') {
+        stage('🚀 Deploy (Production)') {
             when {
                 branch 'main'
             }
             steps {
-                input message: 'Deploy to Production?', ok: 'Deploy'
-                bat """
-                    docker-compose -f docker-compose.prod.yml down || exit 0
-                    docker-compose -f docker-compose.prod.yml up -d
-                """
+                input message: 'Deploy to production?'
+                sh '''
+                docker-compose -f docker-compose.prod.yml down || true
+                docker-compose -f docker-compose.prod.yml up -d
+                '''
             }
         }
     }
 
     post {
-        always {
-            cleanWs()
-        }
         success {
-            echo '🎉 Pipeline succeeded!'
+            echo '🎉 Pipeline DevSecOps réussi'
         }
         failure {
-            echo '❌ Pipeline failed!'
+            echo '❌ Pipeline DevSecOps échoué'
+        }
+        always {
+            cleanWs()
         }
     }
 }
